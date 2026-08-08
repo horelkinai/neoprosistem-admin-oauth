@@ -1,7 +1,43 @@
 // OAuth-прокси для Decap CMS: обмен code на токен и возврат через postMessage
+// targetOrigin админки восстанавливается из site_id (переданного через state в auth)
 export default async function handler(req, res) {
-  const { code, provider = 'github' } = req.query;
+  const { code, state, provider = 'github' } = req.query;
   if (!code) return res.status(400).send('No code');
+
+  let siteId = '';
+  try {
+    siteId = JSON.parse(Buffer.from(String(state || ''), 'base64url').toString()).site_id || '';
+  } catch (_) {}
+  // origin админки: https://<site_id>; для localhost подстраховка через referrer
+  let targetOrigin = siteId ? `https://${siteId}` : '';
+  if (!targetOrigin) {
+    const ref = req.headers.referer || req.headers.referrer || '';
+    if (ref) {
+      try { targetOrigin = new URL(ref).origin; } catch (_) {}
+    }
+  }
+  if (!targetOrigin) targetOrigin = 'https://horelkinai.github.io';
+
+  const sendPage = (title, text, msg) => {
+    const html = `<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="utf-8"><title>${title}</title></head>
+<body style="font-family:sans-serif;text-align:center;padding-top:40px;color:#333">
+<p>${text}</p>
+<script>
+(function () {
+  var provider = ${JSON.stringify(provider)};
+  var targetOrigin = ${JSON.stringify(targetOrigin)};
+  if (window.opener) {
+    window.opener.postMessage('authorization:' + provider + ':' + ${JSON.stringify(msg.kind)} + ':' + ${JSON.stringify(msg.payload)}, targetOrigin);
+  }
+})();
+<\/script>
+</body>
+</html>`;
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.status(200).send(html);
+  };
 
   const r = await fetch('https://github.com/login/oauth/access_token', {
     method: 'POST',
@@ -14,54 +50,12 @@ export default async function handler(req, res) {
   });
   const data = await r.json();
   if (data.error) {
-    const err = JSON.stringify({ message: data.error_description || data.error });
-    const htmlErr = `<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><title>Ошибка авторизации</title></head>
-<body style="font-family:sans-serif;text-align:center;padding-top:40px;color:#b00020">
-<p>Не удалось авторизоваться: ${data.error_description || data.error}</p>
-<p>Это окно можно закрыть и попробовать ещё раз.</p>
-<script>
-(function () {
-  var provider = ${JSON.stringify(provider)};
-  var targetOrigin = (function () {
-    try { return new URL(document.referrer).origin; } catch (e) {}
-    return 'https://horelkinai.github.io';
-  })();
-  if (window.opener) {
-    window.opener.postMessage('authorization:' + provider + ':error:' + ${JSON.stringify(err)}, targetOrigin);
-  }
-})();
-<\/script>
-</body></html>`;
-    return res.status(200).send(htmlErr);
+    return sendPage('Ошибка авторизации',
+      'Не удалось авторизоваться: ' + (data.error_description || data.error) + '. Это окно можно закрыть и попробовать ещё раз.',
+      { kind: 'error', payload: JSON.stringify({ message: data.error_description || data.error }) });
   }
 
-  const payload = JSON.stringify({
-    token: data.access_token,
-    provider,
-    scope: data.scope || '',
-  });
-
-  const html = `<!DOCTYPE html>
-<html lang="ru">
-<head><meta charset="utf-8"><title>Готово</title></head>
-<body style="font-family:sans-serif;text-align:center;padding-top:40px;color:#333">
-<p style="font-size:18px">✅ Авторизация прошла успешно.</p>
-<p>Это окно можно закрыть.</p>
-<script>
-(function () {
-  var provider = ${JSON.stringify(provider)};
-  var targetOrigin = (function () {
-    try { return new URL(document.referrer).origin; } catch (e) {}
-    return 'https://horelkinai.github.io';
-  })();
-  if (window.opener) {
-    window.opener.postMessage('authorization:' + provider + ':success:' + ${JSON.stringify(payload)}, targetOrigin);
-  }
-})();
-<\/script>
-</body>
-</html>`;
-
-  res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.status(200).send(html);
+  return sendPage('Готово',
+    '✅ Авторизация прошла успешно. Это окно можно закрыть.',
+    { kind: 'success', payload: JSON.stringify({ token: data.access_token, provider, scope: data.scope || '' }) });
 }
