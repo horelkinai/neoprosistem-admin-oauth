@@ -1,9 +1,8 @@
-// OAuth-прокси для Decap CMS (Netlify popup-протокол)
-// Отдаёт HTML-страницу (popup), которая:
-//  1) шлёт opener'у postMessage 'authorizing:<provider>'
-//  2) редиректит на GitHub authorize (site_id прокидывается через state)
+// OAuth-прокси: popup (postMessage) или редирект (return_url) — оба режима
+// 1) popup: шлёт opener'у postMessage 'authorizing:<provider>', редиректит на GitHub
+// 2) редирект: сразу редиректит на GitHub; после входа callback вернёт на return_url#token=...
 export default function handler(req, res) {
-  const { provider = 'github', scope = 'repo', site_id = '' } = req.query;
+  const { provider = 'github', scope = 'repo', site_id = '', return_url = '' } = req.query;
   const proto = req.headers['x-forwarded-proto'] || 'https';
   const host = req.headers.host || 'localhost';
   const clientId = process.env.GITHUB_CLIENT_ID;
@@ -17,8 +16,8 @@ export default function handler(req, res) {
   authorizeUrl.searchParams.set('client_id', clientId);
   authorizeUrl.searchParams.set('redirect_uri', redirectUri);
   authorizeUrl.searchParams.set('scope', scope);
-  // Прокидываем site_id (хост админки) через state, чтобы callback знал origin для postMessage
-  authorizeUrl.searchParams.set('state', Buffer.from(JSON.stringify({ site_id })).toString('base64url'));
+  // state несёт site_id (origin для postMessage) и return_url (куда редиректить токен)
+  authorizeUrl.searchParams.set('state', Buffer.from(JSON.stringify({ site_id, return_url })).toString('base64url'));
 
   const html = `<!DOCTYPE html>
 <html lang="ru">

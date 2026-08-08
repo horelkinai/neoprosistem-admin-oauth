@@ -1,14 +1,17 @@
-// OAuth-прокси для Decap CMS: обмен code на токен и возврат через postMessage
-// targetOrigin админки восстанавливается из site_id (переданного через state в auth)
+// OAuth-прокси: обмен code на токен.
+// - popup-режим: postMessage 'authorization:<provider>:success|error:payload' в opener
+// - redirect-режим (return_url в state): редирект на return_url#token=... / #error=...
 export default async function handler(req, res) {
   const { code, state, provider = 'github' } = req.query;
   if (!code) return res.status(400).send('No code');
 
   let siteId = '';
+  let returnUrl = '';
   try {
-    siteId = JSON.parse(Buffer.from(String(state || ''), 'base64url').toString()).site_id || '';
+    const st = JSON.parse(Buffer.from(String(state || ''), 'base64url').toString());
+    siteId = st.site_id || '';
+    returnUrl = st.return_url || '';
   } catch (_) {}
-  // origin админки: https://<site_id>; для localhost подстраховка через referrer
   let targetOrigin = siteId ? `https://${siteId}` : '';
   if (!targetOrigin) {
     const ref = req.headers.referer || req.headers.referrer || '';
@@ -50,9 +53,17 @@ export default async function handler(req, res) {
   });
   const data = await r.json();
   if (data.error) {
+    if (returnUrl) {
+      return res.redirect(returnUrl + '#error=' + encodeURIComponent(data.error_description || data.error));
+    }
     return sendPage('Ошибка авторизации',
       'Не удалось авторизоваться: ' + (data.error_description || data.error) + '. Это окно можно закрыть и попробовать ещё раз.',
       { kind: 'error', payload: JSON.stringify({ message: data.error_description || data.error }) });
+  }
+
+  if (returnUrl) {
+    // редирект-режим: токен в hash (hash не уходит на сервер)
+    return res.redirect(returnUrl + '#token=' + encodeURIComponent(data.access_token) + '&provider=github');
   }
 
   return sendPage('Готово',
